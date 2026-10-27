@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+
 import 'logic.dart';
 import 'models.dart';
+import 'weather.dart';
 
 void main() {
   runApp(const ElectionApp());
@@ -28,7 +30,95 @@ void showMessage(BuildContext context, String text) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
 }
 
+// ---------------- Live weather badge (API, three states) ----------------
 
+class WeatherBadge extends StatefulWidget {
+  const WeatherBadge({super.key});
+
+  @override
+  State<WeatherBadge> createState() => _WeatherBadgeState();
+}
+
+class _WeatherBadgeState extends State<WeatherBadge> {
+  Weather? weather;
+  bool loading = true;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    load();
+  }
+
+  Future<void> load() async {
+    try {
+      final result = await fetchWeather();
+      if (!mounted) return;
+      setState(() {
+        weather = result;
+        loading = false;
+        error = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        loading = false;
+        error = 'Weather unavailable';
+      });
+    }
+  }
+
+  void retry() {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    load();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget content;
+    if (loading) {
+      content = const Row(
+        children: [
+          SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          SizedBox(width: 12),
+          Text('Loading the weather...'),
+        ],
+      );
+    } else if (error != null) {
+      content = Row(
+        children: [
+          const Icon(Icons.wifi_off),
+          const SizedBox(width: 12),
+          Expanded(child: Text(error!)),
+          TextButton(onPressed: retry, child: const Text('Retry')),
+        ],
+      );
+    } else {
+      final w = weather!;
+      content = Row(
+        children: [
+          Icon(w.code == 0 ? Icons.wb_sunny : Icons.cloud),
+          const SizedBox(width: 12),
+          Text(
+            'Election day in Kigali: ${w.temperature.round()}°C, ${describe(w.code)}',
+          ),
+        ],
+      );
+    }
+    return Card(
+      child: Padding(padding: const EdgeInsets.all(12), child: content),
+    );
+  }
+}
+
+// ---------------- Screen 1: Vote ----------------
 
 class VoteScreen extends StatefulWidget {
   const VoteScreen({super.key});
@@ -38,8 +128,23 @@ class VoteScreen extends StatefulWidget {
 }
 
 class _VoteScreenState extends State<VoteScreen> {
-  final election = Election();
+  final election = Election(); // the one shared set of data
   final nameController = TextEditingController();
+  bool ready = false; // false while the saved data loads
+
+  @override
+  void initState() {
+    super.initState();
+    loadSaved();
+  }
+
+  Future<void> loadSaved() async {
+    await election.load();
+    if (!mounted) return;
+    setState(() {
+      ready = true;
+    });
+  }
 
   @override
   void dispose() {
@@ -54,10 +159,18 @@ class _VoteScreenState extends State<VoteScreen> {
       showMessage(context, error);
       return;
     }
+    election.save();
     setState(() {
       nameController.clear();
     });
     showMessage(context, '$voter voted for ${candidate.name}');
+  }
+
+  void undo() {
+    final message = election.undoLastVote();
+    election.save();
+    setState(() {});
+    showMessage(context, message);
   }
 
   void openResults() {
@@ -85,6 +198,11 @@ class _VoteScreenState extends State<VoteScreen> {
         title: const Text('Class Election'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.undo),
+            tooltip: 'Undo last vote',
+            onPressed: undo,
+          ),
+          IconButton(
             icon: const Icon(Icons.bar_chart),
             tooltip: 'Results',
             onPressed: openResults,
@@ -96,10 +214,14 @@ class _VoteScreenState extends State<VoteScreen> {
           ),
         ],
       ),
-      body: Padding(
+      body: !ready
+          ? const Center(child: CircularProgressIndicator())
+          : Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
+            const WeatherBadge(),
+            const SizedBox(height: 12),
             TextField(
               controller: nameController,
               decoration: const InputDecoration(
@@ -115,7 +237,9 @@ class _VoteScreenState extends State<VoteScreen> {
             const SizedBox(height: 12),
             Expanded(
               child: election.candidates.isEmpty
-                  ? const Center(child: Text('No candidates yet. Add one first.'))
+                  ? const Center(
+                child: Text('No candidates yet. Add one first.'),
+              )
                   : ListView.builder(
                 itemCount: election.candidates.length,
                 itemBuilder: (context, index) {
@@ -170,6 +294,8 @@ class ResultsScreen extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
+            Text(election.turnoutText(), style: const TextStyle(fontSize: 16)),
+            const SizedBox(height: 16),
             Expanded(
               child: ranked.isEmpty
                   ? const Center(child: Text('No candidates yet'))
@@ -221,10 +347,12 @@ class CandidatesScreen extends StatefulWidget {
 
 class _CandidatesScreenState extends State<CandidatesScreen> {
   final nameController = TextEditingController();
+  final sizeController = TextEditingController();
 
   @override
   void dispose() {
     nameController.dispose();
+    sizeController.dispose();
     super.dispose();
   }
 
@@ -234,6 +362,7 @@ class _CandidatesScreenState extends State<CandidatesScreen> {
       showMessage(context, error);
       return;
     }
+    widget.election.save();
     setState(() {
       nameController.clear();
     });
@@ -245,7 +374,21 @@ class _CandidatesScreenState extends State<CandidatesScreen> {
       showMessage(context, error);
       return;
     }
+    widget.election.save();
     setState(() {});
+  }
+
+  void saveSize() {
+    final error = widget.election.setClassSize(sizeController.text);
+    if (error != null) {
+      showMessage(context, error);
+      return;
+    }
+    widget.election.save();
+    setState(() {
+      sizeController.clear();
+    });
+    showMessage(context, 'Class size set to ${widget.election.classSize}');
   }
 
   void confirmReset() {
@@ -254,7 +397,9 @@ class _CandidatesScreenState extends State<CandidatesScreen> {
       builder: (dialogContext) {
         return AlertDialog(
           title: const Text('Reset all votes?'),
-          content: const Text('Every vote will be cleared. This cannot be undone.'),
+          content: const Text(
+            'Every vote will be cleared. This cannot be undone.',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(dialogContext),
@@ -262,9 +407,9 @@ class _CandidatesScreenState extends State<CandidatesScreen> {
             ),
             FilledButton(
               onPressed: () {
-                setState(() {
-                  widget.election.reset();
-                });
+                widget.election.reset();
+                widget.election.save();
+                setState(() {});
                 Navigator.pop(dialogContext);
               },
               child: const Text('Reset'),
@@ -297,6 +442,24 @@ class _CandidatesScreenState extends State<CandidatesScreen> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(onPressed: add, child: const Text('Add')),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: sizeController,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText:
+                      'Students in class (now: ${widget.election.classSize ?? "not set"})',
+                      border: const OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(onPressed: saveSize, child: const Text('Set')),
               ],
             ),
             const SizedBox(height: 12),
