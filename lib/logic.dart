@@ -1,6 +1,4 @@
-import 'dart:convert';
-
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'models.dart';
 
@@ -14,160 +12,142 @@ String cleanName(String raw) {
   return words.join(' ');
 }
 
-class Election {
-  final List<Candidate> candidates = [
-    Candidate(name: 'Keza'),
-    Candidate(name: 'Mutoni'),
-    Candidate(name: 'Habimana'),
-  ];
-  final List<String> voters = []; // cleaned names of people who voted
-  final List<VoteRecord> history = []; // every vote, in order
-  int? classSize; // typed by the user; null until set
+// ---------- Worked out from the data every time, never saved ----------
 
-  int get totalVotes {
-    int total = 0;
-    for (final c in candidates) {
-      total += c.votes;
-    }
-    return total;
+int totalVotes(List<Candidate> candidates) {
+  int total = 0;
+  for (final c in candidates) {
+    total += c.votes;
   }
+  return total;
+}
 
-  // ---------- Saving ----------
+double percent(Candidate candidate, int total) {
+  if (total == 0) return 0; // avoids 0 / 0 = NaN
+  return candidate.votes / total * 100;
+}
 
-  Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    final data = {
-      'candidates': candidates.map((c) => c.toJson()).toList(),
-      'voters': voters,
-      'history': history
-          .map((h) => {'voter': h.voter, 'candidate': h.candidate.name})
-          .toList(),
-      'classSize': classSize,
-    };
-    await prefs.setString('election', jsonEncode(data));
+// A sorted COPY, so the real list keeps its order.
+List<Candidate> ranked(List<Candidate> candidates) {
+  final copy = List<Candidate>.from(candidates);
+  copy.sort((a, b) {
+    if (b.votes != a.votes) return b.votes.compareTo(a.votes);
+    return a.name.compareTo(b.name);
+  });
+  return copy;
+}
+
+String bannerText(List<Candidate> candidates) {
+  if (totalVotes(candidates) == 0) return 'No votes yet';
+  final top = ranked(candidates).first.votes; // the top score
+  final leaders = candidates.where((c) => c.votes == top).toList();
+  if (leaders.length == 1) return 'Winner: ${leaders.first.name}';
+  final names = leaders.map((c) => c.name).toList();
+  final last = names.removeLast();
+  return 'Tie between ${names.join(', ')} and $last ($top votes each)';
+}
+
+String turnoutText(int voterCount, int? classSize) {
+  if (classSize == null) {
+    return 'Turnout: set the class size on the Candidates screen';
   }
+  final pct = voterCount / classSize * 100;
+  return 'Turnout: $voterCount of $classSize students (${pct.toStringAsFixed(1)}%)';
+}
 
-  // First time: nothing saved, so the sample data stays.
-  Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final saved = prefs.getString('election');
-    if (saved == null) return;
+// ---------- Changes. Each returns null on success, or an error message.
+// ---------- All the checks come first, the write comes last.
 
-    final data = jsonDecode(saved) as Map<String, dynamic>;
+Future<String?> vote(
+    String rawName,
+    Candidate candidate,
+    List<Voter> voters,
+    ) async {
+  final voter = cleanName(rawName);
+  if (voter.isEmpty) return 'Please type your name';
+  if (voters.any((v) => v.name == voter)) return '$voter has already voted';
 
-    candidates.clear();
-    for (final x in data['candidates'] as List) {
-      candidates.add(Candidate.fromJson(x as Map<String, dynamic>));
-    }
+  // One batch: record the voter AND add 1 to the candidate, all or nothing.
+  final batch = FirebaseFirestore.instance.batch();
+  batch.set(myVoters().doc(), {
+    'name': voter,
+    'candidateId': candidate.id,
+    'createdAt': FieldValue.serverTimestamp(),
+  });
+  batch.update(myCandidates().doc(candidate.id), {
+    'votes': FieldValue.increment(1),
+  });
+  await batch.commit();
+  return null;
+}
 
-    voters.clear();
-    for (final x in data['voters'] as List) {
-      voters.add(x as String);
-    }
+// Undo = do the opposite of the last vote.
+Future<String> undoLastVote(
+    List<Voter> voters,
+    List<Candidate> candidates,
+    ) async {
+  if (voters.isEmpty) return 'No vote to undo';
+  final last = voters.last; // voters arrive in order of time
+  final matches = candidates.where((c) => c.id == last.candidateId);
 
-    history.clear();
-    for (final x in data['history'] as List) {
-      final m = x as Map<String, dynamic>;
-      final matches = candidates.where((c) => c.name == m['candidate']);
-      if (matches.isNotEmpty) {
-        history.add(
-          VoteRecord(voter: m['voter'] as String, candidate: matches.first),
-        );
-      }
-    }
-
-    classSize = data['classSize'] as int?;
-  }
-
-  // ---------- Rules (null = success, otherwise an error message) ----------
-
-  String? vote(String rawName, Candidate candidate) {
-    final voter = cleanName(rawName);
-    if (voter.isEmpty) return 'Please type your name';
-    if (voters.contains(voter)) return '$voter has already voted';
-    voters.add(voter);
-    candidate.votes++;
-    history.add(VoteRecord(voter: voter, candidate: candidate));
-    return null;
-  }
-
-  String undoLastVote() {
-    if (history.isEmpty) return 'No vote to undo';
-    final last = history.removeLast();
-    last.candidate.votes--;
-    voters.remove(last.voter);
-    return 'Undid ${last.voter}\'s vote for ${last.candidate.name}';
-  }
-
-  String? addCandidate(String rawName) {
-    final name = cleanName(rawName);
-    if (name.isEmpty) return 'Candidate name cannot be empty';
-    final exists = candidates.any((c) => c.name == name);
-    if (exists) return '$name is already a candidate';
-    candidates.add(Candidate(name: name));
-    return null;
-  }
-
-  String? removeCandidate(Candidate candidate) {
-    if (candidate.votes > 0) {
-      return '${candidate.name} has votes and cannot be removed';
-    }
-    candidates.remove(candidate);
-    return null;
-  }
-
-  String? setClassSize(String raw) {
-    final size = int.tryParse(raw.trim());
-    if (size == null || size <= 0) {
-      return 'Class size must be a whole number above 0';
-    }
-    if (size < voters.length) {
-      return 'Class size cannot be smaller than the ${voters.length} votes already cast';
-    }
-    classSize = size;
-    return null;
-  }
-
-  String turnoutText() {
-    if (classSize == null) {
-      return 'Turnout: set the class size on the Candidates screen';
-    }
-    final pct = voters.length / classSize! * 100;
-    return 'Turnout: ${voters.length} of $classSize students (${pct.toStringAsFixed(1)}%)';
-  }
-
-  // ---------- Results ----------
-
-  double percent(Candidate candidate) {
-    if (totalVotes == 0) return 0; // avoids 0 / 0 = NaN
-    return candidate.votes / totalVotes * 100;
-  }
-
-  // A sorted COPY, so the real list keeps its order.
-  List<Candidate> ranked() {
-    final copy = List<Candidate>.from(candidates);
-    copy.sort((a, b) {
-      if (b.votes != a.votes) return b.votes.compareTo(a.votes);
-      return a.name.compareTo(b.name);
+  final batch = FirebaseFirestore.instance.batch();
+  batch.delete(myVoters().doc(last.id)); // this person can vote again
+  if (matches.isNotEmpty) {
+    batch.update(myCandidates().doc(last.candidateId), {
+      'votes': FieldValue.increment(-1),
     });
-    return copy;
   }
+  await batch.commit();
 
-  String bannerText() {
-    if (totalVotes == 0) return 'No votes yet';
-    final top = ranked().first.votes;
-    final leaders = candidates.where((c) => c.votes == top).toList();
-    if (leaders.length == 1) return 'Winner: ${leaders.first.name}';
-    final names = leaders.map((c) => c.name).toList();
-    final last = names.removeLast();
-    return 'Tie between ${names.join(', ')} and $last ($top votes each)';
-  }
+  final target = matches.isNotEmpty ? matches.first.name : 'a candidate';
+  return 'Undid ${last.name}\'s vote for $target';
+}
 
-  void reset() {
-    for (final c in candidates) {
-      c.votes = 0;
-    }
-    voters.clear();
-    history.clear();
+Future<String?> addCandidate(String rawName, List<Candidate> candidates) async {
+  final name = cleanName(rawName);
+  if (name.isEmpty) return 'Candidate name cannot be empty';
+  if (candidates.any((c) => c.name == name)) return '$name is already a candidate';
+  await myCandidates().add({'name': name, 'votes': 0});
+  return null;
+}
+
+Future<String?> removeCandidate(Candidate candidate) async {
+  if (candidate.votes > 0) {
+    return '${candidate.name} has votes and cannot be removed';
   }
+  await myCandidates().doc(candidate.id).delete();
+  return null;
+}
+
+Future<String?> setClassSize(String raw, int voterCount) async {
+  final size = int.tryParse(raw.trim());
+  if (size == null || size <= 0) {
+    return 'Class size must be a whole number above 0';
+  }
+  if (size < voterCount) {
+    return 'Class size cannot be smaller than the $voterCount votes already cast';
+  }
+  await myElectionSettings().set({'classSize': size});
+  return null;
+}
+
+// Clear every vote: delete all voters and put every candidate back to 0.
+Future<void> resetVotes(List<Candidate> candidates, List<Voter> voters) async {
+  final batch = FirebaseFirestore.instance.batch();
+  for (final v in voters) {
+    batch.delete(myVoters().doc(v.id));
+  }
+  for (final c in candidates) {
+    batch.update(myCandidates().doc(c.id), {'votes': 0});
+  }
+  await batch.commit();
+}
+
+// Sample data, written once when a new account is created
+Future<void> addSampleCandidates() async {
+  final batch = FirebaseFirestore.instance.batch();
+  for (final name in ['Keza', 'Mutoni', 'Habimana']) {
+    batch.set(myCandidates().doc(), {'name': name, 'votes': 0});
+  }
+  await batch.commit();
 }

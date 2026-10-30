@@ -1,25 +1,64 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 class Candidate {
-  final String name; // never edited, so final
-  int votes; // changes with every vote, so NOT final
+  Candidate({this.id = '', required this.name, this.votes = 0});
 
-  Candidate({required this.name, this.votes = 0});
+  final String id; // the Firestore document id
+  final String name;
+  // Both fields are final now: the screen never changes them,
+  // Firestore does, and the screen redraws when the data arrives.
+  final int votes;
 
-  Map<String, dynamic> toJson() {
-    return {'name': name, 'votes': votes};
-  }
+  Map<String, dynamic> toMap() => {'name': name, 'votes': votes};
 
-  factory Candidate.fromJson(Map<String, dynamic> json) {
+  factory Candidate.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data()!;
     return Candidate(
-      name: json['name'] as String,
-      votes: json['votes'] as int,
+      id: doc.id,
+      name: data['name'] as String,
+      votes: (data['votes'] as num).toInt(),
     );
   }
 }
 
-// One vote, remembered so it can be undone
-class VoteRecord {
-  final String voter;
-  final Candidate candidate;
+// One person who voted. Kept so nobody votes twice, and so a vote can be undone.
+class Voter {
+  Voter({
+    required this.id,
+    required this.name,
+    required this.candidateId,
+    this.createdAt,
+  });
 
-  VoteRecord({required this.voter, required this.candidate});
+  final String id;
+  final String name; // already cleaned
+  final String candidateId; // who they voted for
+  final DateTime? createdAt;
+
+  factory Voter.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final data = doc.data()!;
+    return Voter(
+      id: doc.id,
+      name: data['name'] as String,
+      candidateId: data['candidateId'] as String,
+      createdAt: (data['createdAt'] as Timestamp?)?.toDate(),
+    );
+  }
 }
+
+// Everything lives under users/{uid}/..., exactly where the rules allow.
+DocumentReference<Map<String, dynamic>> _myRoot() {
+  final uid = FirebaseAuth.instance.currentUser!.uid;
+  return FirebaseFirestore.instance.collection('users').doc(uid);
+}
+
+CollectionReference<Map<String, dynamic>> myCandidates() =>
+    _myRoot().collection('candidates');
+
+CollectionReference<Map<String, dynamic>> myVoters() =>
+    _myRoot().collection('voters');
+
+// One small document holding the class size
+DocumentReference<Map<String, dynamic>> myElectionSettings() =>
+    _myRoot().collection('settings').doc('election');
