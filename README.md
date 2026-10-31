@@ -1,33 +1,34 @@
 # Class Election
 
-A Flutter app where a class elects its representative. My data is now saved on the phone with shared_preferences, so nothing is lost when the app closes, and it shows the current weather in Kigali from the Open-Meteo API.
+A Flutter app where a class elects its representative. It signs users in with Firebase Authentication, and each user's data is saved in Cloud Firestore under their own id, so two accounts never see each other's data, and every change appears live.
 
 ## Screenshots
 
-![Before closing](screenshots/before.png)
-![After running again](screenshots/after.png)
-![Live data from an API](screenshots/api.png)
-![No internet](screenshots/no-internet.png)
+![Login](screenshots/login.png)
+![My data in Firestore](screenshots/console.png)
+![Live update](screenshots/live.png)
+![Second account sees nothing of mine](screenshots/denied.png)
 
 ## Features
-- Vote screen: type your name, tap Vote on a candidate
-- Names are cleaned (extra spaces removed, Title Case) before use
-- Each voter can vote only once (aline and ALINE are the same voter)
-- Results screen: ranked candidates with votes, percentage and a bar
-- Banner shows the winner or a tie; "No votes yet" before any vote
-- Candidates screen: add (no empty or duplicate names) and remove (only with 0 votes)
-- Reset all votes with an "Are you sure?" dialog
-- Undo last vote
-- Turnout: votes cast out of the class size
-- Saves everything on the phone with shared_preferences
-- Live weather badge with three states: loading, error with Retry, and data
+- Create an account, log in and log out, with clear messages for wrong input
+- Vote screen: type your name, tap Vote on a candidate, undo the last vote
+- Names are cleaned (extra spaces removed, Title Case), so each voter votes only once
+- Results screen: ranked candidates with votes, percentage and a bar, and a banner for the winner or a tie
+- Candidates screen: add, remove (only with 0 votes), set the class size, reset all votes
+- Live updates on every screen, with loading, error and empty states
+- Live weather badge from the Open-Meteo API
 
-## Think questions
+## How the data is stored
+- `users/{uid}/candidates`: `name`, `votes`
+- `users/{uid}/voters`: `name`, `candidateId`, `createdAt`
+- `users/{uid}/settings/election`: `classSize`
 
-**1. Why must names be cleaned before they are compared?**
+Percentages, ranking, the winner or tie and the turnout are worked out from this data each time it arrives.
 
-The computer compares text letter by letter, so "aline" and " ALINE " are different strings even though a person sees one name. Without cleaning, the same student could vote twice, or I could add "keza" when "Keza" already exists. So every name is cleaned first, then compared.
+## Firestore rules
 
-**2. How does your app decide between a winner and a tie?**
-
-If nobody has voted, it says "No votes yet". Otherwise it finds the highest vote count, collects every candidate with exactly that score, and if there is one it is the winner, and if there are two or more it is a tie.
+```
+match /users/{userId}/{document=**} {
+  allow read, write: if request.auth != null && request.auth.uid == userId;
+}
+```
