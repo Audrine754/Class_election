@@ -1,6 +1,9 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
+import '../repositories/election_repository.dart';
+import '../state/election_state.dart';
 import 'login_screen.dart';
 import 'vote_screen.dart';
 
@@ -15,10 +18,15 @@ class AuthGate extends StatelessWidget {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-        if (snapshot.data == null) {
+        final user = snapshot.data;
+        if (user == null) {
           return const LoginScreen(); // nobody is logged in
         }
-        return const VoteScreen(); // logged in
+        // Signed in: one brain for this user, given to the vote screen.
+        return ChangeNotifierProvider<ElectionState>(
+          create: (_) => ElectionState(ElectionRepository(user.uid)),
+          child: const VoteScreen(),
+        );
       },
     );
   }

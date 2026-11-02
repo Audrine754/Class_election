@@ -1,7 +1,7 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'logic.dart';
+import '../repositories/election_repository.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -37,7 +37,9 @@ class _LoginScreenState extends State<LoginScreen> {
           email: _email.text.trim(),
           password: _password.text,
         );
-        await addSampleCandidates(); // sample data for the new account
+        // Sample data for the new account. This is the one place a screen
+        // talks to a repository directly: the brain does not exist yet.
+        await ElectionRepository(auth.currentUser!.uid).addSamples();
       } else {
         await auth.signInWithEmailAndPassword(
           email: _email.text.trim(),
