@@ -1,5 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
+
 
 class Candidate {
   Candidate({this.id = '', required this.name, this.votes = 0});
@@ -47,18 +47,3 @@ class Voter {
   }
 }
 
-// Everything lives under users/{uid}/..., exactly where the rules allow.
-DocumentReference<Map<String, dynamic>> _myRoot() {
-  final uid = FirebaseAuth.instance.currentUser!.uid;
-  return FirebaseFirestore.instance.collection('users').doc(uid);
-}
-
-CollectionReference<Map<String, dynamic>> myCandidates() =>
-    _myRoot().collection('candidates');
-
-CollectionReference<Map<String, dynamic>> myVoters() =>
-    _myRoot().collection('voters');
-
-// One small document holding the class size
-DocumentReference<Map<String, dynamic>> myElectionSettings() =>
-    _myRoot().collection('settings').doc('election');

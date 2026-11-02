@@ -105,6 +105,7 @@ class _CandidatesScreenState extends State<CandidatesScreen> {
   }
 
   Widget _body(ElectionState election) {
+
     if (election.error != null) {
       return Center(
         child: Padding(
